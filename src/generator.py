@@ -4,10 +4,11 @@ import json
 import time
 import requests
 import urllib.parse
+import math
 from io import BytesIO
 from google import genai
 from gtts import gTTS
-from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, vfx
+from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
 from moviepy.config import change_settings
 from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
@@ -56,10 +57,9 @@ def generate_curriculum(previous_titles=None):
     print("🤖 Generating a new Kids Story curriculum...")
     client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
     prompt = """
-    You are a children's storyteller. Generate a curriculum for a YouTube Shorts series called 'Kids Cartoon Stories'.
+    You are a children's storyteller. Generate a curriculum for a YouTube series called 'Kids Cartoon Stories'.
     Respond with ONLY a valid JSON object. The object must contain a key "lessons" which is a list of 10 lesson objects.
     Each lesson object must have these keys: "chapter", "part", "title", "status" (defaulted to "pending"), and "youtube_id" (defaulted to null).
-    Topics should be about cute animals, magical lands, or learning good habits.
     """
     response = None
     for model_name in GEMINI_MODELS:
@@ -76,12 +76,12 @@ def generate_lesson_content(lesson_title):
     print(f"🤖 Writing multi-scene story: '{lesson_title}'...")
     client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
     prompt = f"""
-    You are a children's storyteller. Write a very short 3-scene story for a YouTube Short about '{lesson_title}'.
+    You are a children's storyteller. Write an engaging 2-minute story for a YouTube video about '{lesson_title}'.
     Generate a JSON response with these keys:
-    1. "story_text": A 40-50 word complete story for kids.
-    2. "scenes": A list of 3 objects. Each object must have:
-       - "text": A short 1-sentence caption for this scene.
-       - "image_prompt": A detailed prompt for a 3D Pixar-style cartoon image representing this scene.
+    1. "story_text": A 150-200 word story for kids. Use simple, expressive English.
+    2. "scenes": A list of exactly 6 objects. Each object must have:
+       - "text": A short 1-2 sentence caption for this scene.
+       - "image_prompt": A detailed prompt for a 3D Pixar-style cartoon image representing this scene. IMPORTANT: Make the characters look expressive, maybe with their mouths open as if they are talking, highly detailed, vibrant colors.
     3. "hashtags": A string of 3-5 relevant hashtags.
     Return only valid JSON.
     """
@@ -105,12 +105,11 @@ def generate_visuals(output_dir, video_type, scene_text, image_prompt, slide_num
     
     draw = ImageDraw.Draw(bg_image)
     try:
-        content_font = ImageFont.truetype(str(FONT_FILE), 55)
+        content_font = ImageFont.truetype(str(FONT_FILE), 50)
     except IOError:
         content_font = FALLBACK_THUMBNAIL_FONT
 
-    # Add text box at bottom
-    draw.rectangle([50, 1450, 1030, 1800], fill=(0, 0, 0, 160))
+    draw.rectangle([50, 1450, 1030, 1800], fill=(0, 0, 0, 180))
     words = scene_text.split()
     lines = []
     current_line = ""
@@ -128,14 +127,14 @@ def generate_visuals(output_dir, video_type, scene_text, image_prompt, slide_num
         bbox = draw.textbbox((0, 0), line, font=content_font)
         x = (width - (bbox[2] - bbox[0])) / 2
         draw.text((x, y_text), line, font=content_font, fill=(255, 255, 255), stroke_width=2, stroke_fill="black")
-        y_text += 75
+        y_text += 70
 
     path = output_dir / f"slide_{slide_number:02d}.png"
     bg_image.convert("RGB").save(path)
     return str(path)
 
 def create_video(slide_paths, audio_path, output_path):
-    print(f"🎬 Creating Animated Short Video with Zoom Effects...")
+    print(f"🎬 Creating Animated Video with Pulse & Float Effects...")
     
     audio_clip = AudioFileClip(str(audio_path))
     total_duration = audio_clip.duration
@@ -143,10 +142,19 @@ def create_video(slide_paths, audio_path, output_path):
 
     image_clips = []
     for i, img_path in enumerate(slide_paths):
-        # Apply a slow zoom-in effect (Ken Burns) to make it look animated
         clip = ImageClip(img_path).set_duration(duration_per_slide)
-        clip = clip.resize(lambda t: 1 + 0.05 * (t / duration_per_slide))
-        image_clips.append(clip)
+        
+        # ১. Zoom In Effect (Ken Burns)
+        zoom_clip = clip.resize(lambda t: 1 + 0.05 * (t / duration_per_slide))
+        
+        # ২. Breathing/Pulse Effect (ছবিটি ধীরে ধীরে ওঠানামা করবে)
+        # এটি একটি সাইন ওয়েভ ব্যবহার করে ছবিকে সামান্য বড়-ছোট করে, যা একে জীবন্ত করে তোলে
+        def pulse_effect(t):
+            return 1 + 0.02 * math.sin(2 * math.pi * t / 2.0)
+            
+        animated_clip = zoom_clip.resize(pulse_effect)
+        
+        image_clips.append(animated_clip)
 
     final_video = concatenate_videoclips(image_clips, method="compose")
     final_video = final_video.set_audio(audio_clip)
@@ -154,4 +162,4 @@ def create_video(slide_paths, audio_path, output_path):
     final_video.write_videofile(
         str(output_path), fps=24, codec="libx264", audio_codec="aac", audio_bitrate="192k", preset="medium", threads=4
     )
-    print(f"✅ Animated Short video created successfully!")
+    print(f"✅ Animated video created successfully!")
