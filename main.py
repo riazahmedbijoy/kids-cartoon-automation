@@ -8,8 +8,8 @@ from pathlib import Path
 from src.generator import (
     generate_curriculum,
     generate_lesson_content,
-    text_to_speech,
-    generate_visuals,
+    text_to_speech_edge, # নতুন ভয়েস ইমপোর্ট
+    get_cartoon_image,   # শুধু ১টি ছবির জন্য
     create_video,
     YOUR_NAME
 )
@@ -21,7 +21,6 @@ LESSONS_PER_RUN = 1
 
 def get_content_plan():
     if not CONTENT_PLAN_FILE.exists():
-        print("📄 content_plan.json not found. Generating new plan...")
         new_plan = generate_curriculum()
         with open(CONTENT_PLAN_FILE, 'w') as f:
             json.dump(new_plan, f, indent=2)
@@ -41,54 +40,51 @@ def update_content_plan(plan):
     with open(CONTENT_PLAN_FILE, 'w') as f:
         json.dump(plan, f, indent=2)
 
-def produce_video(lesson):
-    print(f"\n▶️ Starting production for Kids Video: '{lesson['title']}'")
+def produce_story_video(lesson):
+    print(f"\n▶️ Starting production for Bedtime Story: '{lesson['title']}'")
     unique_id = f"{datetime.datetime.now().strftime('%Y%m%d')}_{lesson['chapter']}"
     
-    # 1. Generate Long Story with 6 Scenes
+    # 1. Generate Story and Cover Image Prompt (1টি ছবি)
     lesson_content = generate_lesson_content(lesson['title'])
     story_text = lesson_content['story_text']
-    scenes = lesson_content['scenes']
-    hashtags = lesson_content.get("hashtags", "#KidsStories #Cartoon")
+    image_prompt = lesson_content['image_prompt']
+    hashtags = lesson_content.get("hashtags", "#BedtimeStories #Kids")
     
-    # 2. Generate Audio for the whole story
+    print(f"📖 Story: {story_text}")
+    
+    # 2. Generate Realistic Audio (Edge TTS)
     audio_mp3_path = OUTPUT_DIR / f"audio_{unique_id}.mp3"
-    audio_path = text_to_speech(story_text, audio_mp3_path)
+    audio_path = text_to_speech_edge(story_text, audio_mp3_path)
     
-    # 3. Generate Images for each scene
+    # 3. Generate ONE Cover Image
     slide_dir = OUTPUT_DIR / f"slides_{unique_id}"
-    slide_paths = []
-    for i, scene in enumerate(scenes):
-        path = generate_visuals(
-            output_dir=slide_dir,
-            video_type='video',
-            scene_text=scene['text'],
-            image_prompt=scene['image_prompt'],
-            slide_number=i+1
-        )
-        slide_paths.append(path)
+    slide_dir.mkdir(exist_ok=True, parents=True)
+    image_path = slide_dir / "cover.png"
     
-    # 4. Create Animated Video (Pulse & Zoom Effect)
+    img = get_cartoon_image(image_prompt)
+    img.resize((1080, 1920)).convert("RGB").save(image_path)
+    
+    # 4. Create Video (1টি ছবি + অডিও)
     video_path = OUTPUT_DIR / f"video_{unique_id}.mp4"
-    create_video(slide_paths, audio_path, video_path)
+    create_video(image_path, audio_path, video_path)
     
     # 5. Upload to YouTube
     print("\n📤 Uploading Video to YouTube...")
     video_desc = f"{story_text}\n\n{hashtags}"
-    video_title = f"{lesson['title']}" 
+    video_title = f"{lesson['title']} - Bedtime Story" 
     
     video_id = upload_to_youtube(
         video_path,
         video_title,
         video_desc,
-        "Kids, Cartoon, Stories, Animation",
-        slide_paths[0] 
+        "Kids, Bedtime Stories, Audio Story, Cartoon",
+        image_path # থাম্বনেইল হিসেবে কভার ছবি
     )
     
     return video_id
 
 def main():
-    print("🚀 Starting Kids Cartoon Video Generator")
+    print("🚀 Starting Kids Bedtime Story Generator")
     OUTPUT_DIR.mkdir(exist_ok=True)
     
     try:
@@ -96,7 +92,6 @@ def main():
         pending = [(i, lesson) for i, lesson in enumerate(plan['lessons']) if lesson['status'] == 'pending']
 
         if not pending:
-            print("🎉 All stories produced! Generating new curriculum...")
             new_plan = generate_curriculum()
             update_content_plan(new_plan)
             plan = new_plan
@@ -106,7 +101,7 @@ def main():
         failed = []
         for lesson_index, lesson in pending[:LESSONS_PER_RUN]:
             try:
-                video_id = produce_video(lesson)
+                video_id = produce_story_video(lesson)
                 if video_id:
                     for original_lesson in plan['lessons']:
                         if original_lesson['title'].strip().lower() == lesson['title'].strip().lower():
