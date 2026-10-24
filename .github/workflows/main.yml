@@ -1,8 +1,8 @@
-name: Autonomous AI Course Generator
+name: Kids Bedtime Story Generator
 
 on:
   schedule:
-    - cron: '0 7 * * *' # 12:30 PM IST daily
+    - cron: '0 15 * * *' # প্রতিদিন UTC 15:00 (বাংলাদেশ সময় রাত ৯:০০টা)
   workflow_dispatch:
 
 # A run takes far longer than the gap between a manual dispatch and the daily
@@ -55,7 +55,6 @@ jobs:
         id: production-run
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: python main.py
 
       - name: 🔎 Upload Audio Artifact for Debugging
@@ -63,7 +62,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: audio-debug-files
-          path: output/*.wav
+          path: output/*.mp3
 
       - name: 🎥 Upload Final Video for Debugging
         if: always()
@@ -75,7 +74,7 @@ jobs:
       - name: 🎞️ Generate demo GIF from latest video
         if: steps.production-run.outcome == 'success'
         run: |
-          VIDEO=$(ls output/long_video_*.mp4 2>/dev/null | head -n 1)
+          VIDEO=$(ls output/video_*.mp4 2>/dev/null | head -n 1)
           if [ -n "$VIDEO" ]; then
             echo "✅ Found video: $VIDEO — converting to GIF..."
             ffmpeg -y -ss 0 -t 12 -i "$VIDEO" \
@@ -83,7 +82,7 @@ jobs:
               images/demo.gif
             echo "✅ Demo GIF created at images/demo.gif"
           else
-            echo "⚠️ No long video found in output/, skipping GIF creation."
+            echo "⚠️ No video found in output/, skipping GIF creation."
           fi
 
       - name: 💾 Commit and push content plan and demo GIF
