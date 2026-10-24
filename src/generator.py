@@ -6,16 +6,16 @@ import requests
 import urllib.parse
 import asyncio
 import edge_tts
+import numpy as np
 from io import BytesIO
 from google import genai
-from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
+from moviepy.editor import AudioFileClip, ImageClip
 from moviepy.config import change_settings
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from pathlib import Path
 
 ASSETS_PATH = Path("assets")
 FONT_FILE = ASSETS_PATH / "fonts/arial.ttf"
-FALLBACK_THUMBNAIL_FONT = ImageFont.load_default()
 YOUR_NAME = "Kids Story"
 
 if os.name == 'posix':
@@ -33,11 +33,10 @@ def get_cartoon_image(prompt):
         url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1920&nologo=true&seed={int(time.time())}"
         response = requests.get(url, timeout=60)
         response.raise_for_status()
-        return Image.open(BytesIO(response.content)).convert("RGBA")
+        return Image.open(BytesIO(response.content)).convert("RGB")
     except Exception as e:
-        print(f"❌ Error generating image: {e}. Using gradient background.")
-        img = Image.new('RGBA', (1080, 1920), color=(20, 30, 50))
-        return img
+        print(f"❌ Error generating image: {e}. Using solid background.")
+        return Image.new('RGB', (1080, 1920), color=(20, 30, 50))
 
 def text_to_speech_edge(text, output_path):
     """Uses Microsoft Edge's realistic neural voices."""
@@ -103,9 +102,13 @@ def create_video(image_path, audio_path, output_path):
     audio_clip = AudioFileClip(str(audio_path))
     duration = audio_clip.duration
     
-    # FIX: Converting image_path to string so MoviePy can read it
-    clip = ImageClip(str(image_path)).set_duration(duration)
-    clip = clip.resize(lambda t: 1 + 0.10 * (t / duration))
+    # ছবি লোড করে সঠিক সাইজে আনা (যাতে গ্লিচ না হয়)
+    img = Image.open(image_path).convert("RGB")
+    img = img.resize((1080, 1920), Image.Resampling.LANCZOS)
+    img_array = np.array(img)
+    
+    # জুম ইফেক্ট ছাড়া শুধু ছবি ও অডিও যোগ করা
+    clip = ImageClip(img_array).set_duration(duration).set_fps(24)
     clip = clip.set_audio(audio_clip)
     
     clip.write_videofile(
