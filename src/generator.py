@@ -1,329 +1,146 @@
-# FILE: src/generator.py
-# FINAL, CLEAN VERSION: Compatible with per-slide audio sync, dynamic slides, and automatic model fallback.
-
+# FILE: main.py
 import os
+import sys
 import json
-import time
-import random
-import requests
-from io import BytesIO
-from google import genai
-from gtts import gTTS
-from gtts.tts import gTTSError
-from moviepy.editor import AudioFileClip, ImageClip, CompositeAudioClip, concatenate_videoclips, vfx
-from moviepy.config import change_settings
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+import datetime
+import traceback
 from pathlib import Path
-from pydub import AudioSegment
+from src.generator import (
+    generate_curriculum,
+    generate_lesson_content,
+    text_to_speech,
+    generate_visuals,
+    create_video,
+    YOUR_NAME
+)
+from src.uploader import upload_to_youtube
 
-# --- Configuration ---
-ASSETS_PATH = Path("assets")
-FONT_FILE = ASSETS_PATH / "fonts/arial.ttf"
-BACKGROUND_MUSIC_PATH = ASSETS_PATH / "music/bg_music.mp3"
-FALLBACK_THUMBNAIL_FONT = ImageFont.load_default()
-YOUR_NAME = "Chaitanya"
+CONTENT_PLAN_FILE = Path("content_plan.json")
+OUTPUT_DIR = Path("output")
+LESSONS_PER_RUN = 1
 
-TTS_MAX_ATTEMPTS = 5
-TTS_BACKOFF_SECONDS = 5
-TTS_MIN_GAP_SECONDS = 2
-_last_tts_request = 0.0
-
-if os.name == 'posix':
-    change_settings({"IMAGEMAGICK_BINARY": "/usr/bin/convert"})
-
-# অটোমেটিক মডেল ট্রাই করার লিস্ট (একটি কাজ না করলে পরেরটি চেষ্টা করবে)
-GEMINI_MODELS = [
-    'gemini-3.8-flash',
-    'gemini-3.5-flash-lite',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash-latest',
-    'gemini-1.5-flash',
-    'gemini-1.5-pro'
-]
-
-def get_pexels_image(query, video_type):
-    pexels_api_key = os.getenv("PEXELS_API_KEY")
-    if not pexels_api_key:
-        print("⚠️ PEXELS_API_KEY not found. Using solid color background.")
-        return None
-
-    orientation = 'landscape' if video_type == 'long' else 'portrait'
-    try:
-        headers = {"Authorization": pexels_api_key}
-        params = {"query": f"abstract {query}", "per_page": 1, "orientation": orientation}
-        response = requests.get("https://api.pexels.com/v1/search", headers=headers, params=params, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        if data.get('photos'):
-            image_url = data['photos'][0]['src']['large2x']
-            image_response = requests.get(image_url, timeout=15)
-            image_response.raise_for_status()
-            return Image.open(BytesIO(image_response.content)).convert("RGBA")
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Network error fetching Pexels image for query '{query}': {e}")
-    except Exception as e:
-        print(f"❌ General error fetching Pexels image for query '{query}': {e}")
-    return None
-
-def _throttle_tts():
-    global _last_tts_request
-    elapsed = time.monotonic() - _last_tts_request
-    if elapsed < TTS_MIN_GAP_SECONDS:
-        time.sleep(TTS_MIN_GAP_SECONDS - elapsed)
-    _last_tts_request = time.monotonic()
-
-def text_to_speech(text, output_path):
-    print(f"🎤 Converting script to speech...")
-    temp_mp3_path = str(output_path).replace('.mp3', '_temp.mp3')
-    wav_path = str(output_path.with_suffix('.wav'))
-
-    for attempt in range(1, TTS_MAX_ATTEMPTS + 1):
-        try:
-            _throttle_tts()
-            tts = gTTS(text=text, lang='en', slow=False)
-            tts.save(temp_mp3_path)
-
-            if os.path.getsize(temp_mp3_path) < 1024:
-                raise gTTSError("gTTS wrote an empty or truncated audio file.")
-
-            audio = AudioSegment.from_mp3(temp_mp3_path)
-            audio.export(wav_path, format="wav", codec="pcm_s16le")
-            os.remove(temp_mp3_path)
-            print(f"✅ Speech generated and converted to WAV successfully!")
-            return Path(wav_path)
-        except Exception as e:
-            if os.path.exists(temp_mp3_path):
-                os.remove(temp_mp3_path)
-            if attempt == TTS_MAX_ATTEMPTS:
-                print(f"❌ ERROR: Failed to generate speech after {TTS_MAX_ATTEMPTS} attempts: {e}")
-                raise
-            delay = TTS_BACKOFF_SECONDS * (2 ** (attempt - 1)) + random.uniform(0, 2)
-            print(f"⚠️ TTS attempt {attempt}/{TTS_MAX_ATTEMPTS} failed ({e}). Retrying in {delay:.1f}s...")
-            time.sleep(delay)
-
-def generate_curriculum(previous_titles=None):
-    print("🤖 No content plan found. Generating a new curriculum from scratch...")
-    client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
-
-    history = ""
-    if previous_titles:
-        formatted = "\n".join([f"{i+1}. {t}" for i, t in enumerate(previous_titles)])
-        history = f"The following lessons have already been created:\n{formatted}\n\nPlease continue from where this series left off.\n"
-
-    prompt = f"""
-    You are an expert AI educator. Generate a curriculum for a YouTube series called 'AI for Developers by {YOUR_NAME}'.
-    {history}
-    The style must be: 'Assume the viewer is a beginner or non-technical person starting their journey into AI as a developer.
-    Use simple real-world analogies, relatable examples, and then connect to technical concepts.'
-
-    The curriculum must guide a developer from absolute beginner to advanced AI, covering foundations like Generative AI, LLMs, Vector Databases, and Agentic AI...
-    ...then continue into deep AI topics like Reinforcement Learning, Transformers internals, multi-agent systems, tool use, LangGraph, AI architecture, and more.
-
-    Respond with ONLY a valid JSON object. The object must contain a key "lessons" which is a list of 20 lesson objects.
-    Each lesson object must have these keys: "chapter", "part", "title", "status" (defaulted to "pending"), and "youtube_id" (defaulted to null).
-    """
-    
-    response = None
-    for model_name in GEMINI_MODELS:
-        try:
-            print(f"🔄 Trying model: {model_name} for curriculum...")
-            response = client.models.generate_content(model=model_name, contents=prompt)
-            print(f"✅ Success with model: {model_name}")
-            break
-        except Exception as e:
-            print(f"⚠️ Model {model_name} failed: {e}. Trying next model...")
-            time.sleep(2)
-            
-    if not response:
-        raise Exception("❌ CRITICAL ERROR: Failed to generate curriculum. All fallback models failed.")
-
-    try:
-        json_string = response.text.strip().replace("```json", "").replace("```", "")
-        curriculum = json.loads(json_string)
-        print("✅ New curriculum generated successfully!")
-        return curriculum
-    except Exception as e:
-        print(f"❌ ERROR parsing curriculum JSON: {e}")
-        raise
-
-def generate_lesson_content(lesson_title):
-    print(f"🤖 Generating content for lesson: '{lesson_title}'...")
-    client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
-    
-    prompt = f"""
-    You are creating a lesson for the 'AI for Developers by {YOUR_NAME}' series. The topic is '{lesson_title}'.
-    The style is: Assume the viewer is a beginner developer or non-tech person who wants to learn AI from scratch.
-    Use analogies and clear, simple language. Each concept must be explained from a developer's perspective, assuming no prior AI or ML knowledge.
-
-    Generate a JSON response with three keys:
-    1. "long_form_slides": A list of 7 to 8 slide objects for a longer, more detailed main video. Each object needs a "title" and "content" key.
-    2. "short_form_highlight": A single, punchy, 1-2 sentence summary for a YouTube Short.
-    3. "hashtags": A string of 5-7 relevant, space-separated hashtags for this lesson.
-
-    Return only valid JSON.
-    """
-    
-    response = None
-    for model_name in GEMINI_MODELS:
-        try:
-            print(f"🔄 Trying model: {model_name} for lesson content...")
-            response = client.models.generate_content(model=model_name, contents=prompt)
-            print(f"✅ Success with model: {model_name}")
-            break
-        except Exception as e:
-            print(f"⚠️ Model {model_name} failed: {e}. Trying next model...")
-            time.sleep(2)
-            
-    if not response:
-        raise Exception(f"❌ ERROR: Failed to generate lesson content for '{lesson_title}'. All fallback models failed.")
-
-    try:
-        json_string = response.text.strip().replace("```json", "").replace("```", "")
-        content = json.loads(json_string)
-        print("✅ Lesson content generated successfully.")
-        return content
-    except Exception as e:
-        print(f"❌ ERROR parsing lesson JSON: {e}")
-        raise
-
-def generate_visuals(output_dir, video_type, slide_content=None, thumbnail_title=None, slide_number=0, total_slides=0):
-    output_dir.mkdir(exist_ok=True, parents=True)
-    is_thumbnail = thumbnail_title is not None
-    width, height = (1920, 1080) if video_type == 'long' else (1080, 1920)
-    title = thumbnail_title if is_thumbnail else slide_content.get("title", "")
-    bg_image = get_pexels_image(title, video_type)
-
-    if not bg_image:
-        bg_image = Image.new('RGBA', (width, height), color=(12, 17, 29))
-    bg_image = bg_image.resize((width, height)).filter(ImageFilter.GaussianBlur(5))
-    darken_layer = Image.new('RGBA', bg_image.size, (0, 0, 0, 150))
-    final_bg = Image.alpha_composite(bg_image, darken_layer).convert("RGB")
-
-    if is_thumbnail and video_type == 'long':
-        w, h = final_bg.size
-        if h > w:
-            final_bg = final_bg.transpose(Image.ROTATE_270).resize((1920, 1080))
-
-    draw = ImageDraw.Draw(final_bg)
-    try:
-        title_font = ImageFont.truetype(str(FONT_FILE), 80 if video_type == 'long' else 90)
-        content_font = ImageFont.truetype(str(FONT_FILE), 45 if video_type == 'long' else 55)
-        footer_font = ImageFont.truetype(str(FONT_FILE), 25 if video_type == 'long' else 35)
-    except IOError:
-        title_font = content_font = footer_font = FALLBACK_THUMBNAIL_FONT
-
-    if not is_thumbnail:
-        header_height = int(height * 0.18)
-        draw.rectangle([0, 0, width, header_height], fill=(25, 40, 65, 200))
-        words = title.split()
-        title_lines = []
-        current_line = ""
-        for word in words:
-            test_line = f"{current_line} {word}".strip()
-            bbox = draw.textbbox((0, 0), test_line, font=title_font)
-            if bbox[2] - bbox[0] < width * 0.9:
-                current_line = test_line
-            else:
-                title_lines.append(current_line)
-                current_line = word
-        title_lines.append(current_line)
-
-        line_height = title_font.getbbox("A")[3] + 10
-        total_title_height = len(title_lines) * line_height
-        y_text = (header_height - total_title_height) / 2
-        for line in title_lines:
-            bbox = draw.textbbox((0, 0), line, font=title_font)
-            x = (width - (bbox[2] - bbox[0])) / 2
-            draw.text((x, y_text), line, font=title_font, fill=(255, 255, 255))
-            y_text += line_height
+def get_content_plan():
+    if not CONTENT_PLAN_FILE.exists():
+        print("📄 content_plan.json not found. Generating new plan...")
+        new_plan = generate_curriculum()
+        with open(CONTENT_PLAN_FILE, 'w') as f:
+            json.dump(new_plan, f, indent=2)
+        return new_plan
     else:
-        bbox = draw.textbbox((0, 0), title, font=title_font)
-        x = (width - (bbox[2] - bbox[0])) / 2
-        y = (height - (bbox[3] - bbox[1])) / 2
-        draw.text((x, y), title, font=title_font, fill=(255, 255, 255), stroke_width=2, stroke_fill="black")
+        try:
+            with open(CONTENT_PLAN_FILE, 'r') as f:
+                plan = json.load(f)
+            return plan
+        except Exception:
+            new_plan = generate_curriculum()
+            with open(CONTENT_PLAN_FILE, 'w') as f:
+                json.dump(new_plan, f, indent=2)
+            return new_plan
 
-    if not is_thumbnail:
-        content = slide_content.get("content", "")
-        is_special_slide = len(content.split()) < 10
-        words = content.split()
-        lines = []
-        current_line = ""
-        for word in words:
-            test_line = f"{current_line} {word}".strip()
-            if draw.textbbox((0, 0), test_line, font=content_font)[2] < width * 0.85:
-                current_line = test_line
-            else:
-                lines.append(current_line)
-                current_line = word
-        lines.append(current_line)
+def update_content_plan(plan):
+    with open(CONTENT_PLAN_FILE, 'w') as f:
+        json.dump(plan, f, indent=2)
 
-        line_height = content_font.getbbox("A")[3] + 15
-        total_text_height = len(lines) * line_height
-        y_text = (height - total_text_height) / 2 if is_special_slide else header_height + 100
-        for line in lines:
-            bbox = draw.textbbox((0, 0), line, font=content_font)
-            x = (width - (bbox[2] - bbox[0])) / 2
-            draw.text((x, y_text), line, font=content_font, fill=(230, 230, 230))
-            y_text += line_height
+def produce_short_video(lesson):
+    print(f"\n▶️ Starting production for Kids Short: '{lesson['title']}'")
+    unique_id = f"{datetime.datetime.now().strftime('%Y%m%d')}_{lesson['chapter']}"
+    
+    # 1. Generate Story and Image Prompt
+    lesson_content = generate_lesson_content(lesson['title'])
+    story_text = lesson_content['story_text']
+    image_prompt = lesson_content['image_prompt']
+    hashtags = lesson_content.get("hashtags", "#KidsStories #Cartoon #Shorts")
+    
+    print(f"📖 Story: {story_text}")
+    
+    # 2. Generate Audio
+    audio_mp3_path = OUTPUT_DIR / f"audio_{unique_id}.mp3"
+    audio_path = text_to_speech(story_text, audio_mp3_path)
+    
+    # 3. Generate Cartoon Image
+    slide_dir = OUTPUT_DIR / f"slides_{unique_id}"
+    slide_content = {
+        "title": lesson['title'],
+        "content": story_text,
+        "image_prompt": image_prompt
+    }
+    slide_path = generate_visuals(
+        output_dir=slide_dir,
+        video_type='short',
+        slide_content=slide_content,
+        slide_number=1,
+        total_slides=1
+    )
+    
+    # 4. Create Video
+    video_path = OUTPUT_DIR / f"short_{unique_id}.mp4"
+    create_video([slide_path], [audio_path], video_path, 'short')
+    
+    # 5. Create Thumbnail
+    thumb_path = generate_visuals(
+        output_dir=OUTPUT_DIR,
+        video_type='short',
+        thumbnail_title=lesson['title']
+    )
+    
+    # 6. Upload to YouTube
+    print("\n📤 Uploading Short to YouTube...")
+    short_desc = f"{story_text}\n\n{hashtags}"
+    short_title = f"{lesson['title']} #Shorts"
+    
+    video_id = upload_to_youtube(
+        video_path,
+        short_title,
+        short_desc,
+        "Kids, Cartoon, Shorts, Stories, Animation",
+        thumb_path
+    )
+    
+    return video_id
 
-        footer_height = int(height * 0.06)
-        draw.rectangle([0, height - footer_height, width, height], fill=(25, 40, 65, 200))
-        draw.text((40, height - footer_height + 12), f"AI for Developers by {YOUR_NAME}", font=footer_font, fill=(180, 180, 180))
-        if total_slides > 0:
-            slide_num_text = f"Slide {slide_number} of {total_slides}"
-            bbox = draw.textbbox((0, 0), slide_num_text, font=footer_font)
-            draw.text((width - bbox[2] - 40, height - footer_height + 12), slide_num_text, font=footer_font, fill=(180, 180, 180))
-
-    file_prefix = "thumbnail" if is_thumbnail else f"slide_{slide_number:02d}"
-    path = output_dir / f"{file_prefix}.png"
-    final_bg.save(path)
-    return str(path)
-
-def create_video(slide_paths, audio_paths, output_path, video_type):
-    print(f"🎬 Creating {video_type} video...")
+def main():
+    print("🚀 Starting Kids Cartoon Shorts Generator")
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    
     try:
-        if not slide_paths or not audio_paths or len(slide_paths) != len(audio_paths):
-            raise ValueError("Mismatch between slides and audio clips, or no slides provided.")
+        plan = get_content_plan()
+        pending = [(i, lesson) for i, lesson in enumerate(plan['lessons']) if lesson['status'] == 'pending']
 
-        image_clips = []
-        for i, (img_path, audio_path) in enumerate(zip(slide_paths, audio_paths)):
-            audio_clip = AudioFileClip(str(audio_path))
-            duration = audio_clip.duration + 0.5
-            img_clip = (
-                ImageClip(img_path)
-                .set_duration(duration)
-                .set_audio(audio_clip)
-                .fadein(0.5)
-                .fadeout(0.5)
-            )
-            image_clips.append(img_clip)
+        if not pending:
+            print("🎉 All stories produced! Generating new curriculum...")
+            new_plan = generate_curriculum()
+            update_content_plan(new_plan)
+            plan = new_plan
+            pending = [(i, lesson) for i, lesson in enumerate(new_plan['lessons']) if lesson['status'] == 'pending']
+            if not pending: return
 
-        final_video = concatenate_videoclips(image_clips, method="compose")
+        failed = []
+        for lesson_index, lesson in pending[:LESSONS_PER_RUN]:
+            try:
+                video_id = produce_short_video(lesson)
+                if video_id:
+                    for original_lesson in plan['lessons']:
+                        if original_lesson['title'].strip().lower() == lesson['title'].strip().lower():
+                            original_lesson['status'] = 'complete'
+                            original_lesson['youtube_id'] = video_id
+                            print(f"✅ Completed: {lesson['title']}")
+                            break
+                else:
+                    failed.append(lesson['title'])
+            except Exception as e:
+                print(f"❌ Failed: {lesson['title']}")
+                traceback.print_exc()
+                failed.append(lesson['title'])
+            finally:
+                update_content_plan(plan)
 
-        if BACKGROUND_MUSIC_PATH.exists():
-            bg_music = AudioFileClip(str(BACKGROUND_MUSIC_PATH)).volumex(0.05)
-            if bg_music.duration < final_video.duration:
-                bg_music = bg_music.fx(vfx.loop, duration=final_video.duration)
-            else:
-                bg_music = bg_music.subclip(0, final_video.duration)
-
-            composite_audio = CompositeAudioClip([
-                final_video.audio.volumex(1.2),
-                bg_music
-            ])
-            final_video = final_video.set_audio(composite_audio)
-
-        final_video.write_videofile(
-            str(output_path),
-            fps=24,
-            codec="libx264",
-            audio_codec="aac",
-            audio_bitrate="192k",
-            preset="medium",
-            threads=4
-        )
-        print(f"✅ {video_type.capitalize()} video created successfully!")
+        if failed:
+            sys.exit(1)
 
     except Exception as e:
-        print(f"❌ ERROR during video creation: {e}")
-        raise
+        print("❌ Critical error in main()")
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
