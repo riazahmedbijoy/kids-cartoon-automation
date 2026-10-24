@@ -1,0 +1,74 @@
+{
+  "lessons": [
+    {
+      "chapter": 1,
+      "part": 1,
+      "title": "The Brave Little Lion Learns to Roar",
+      "status": "complete",
+      "youtube_id": "psHYh_2Yj8A"
+    },
+    {
+      "chapter": 1,
+      "part": 2,
+      "title": "Timmy the Talking Tree Shares His Apples",
+      "status": "pending",
+      "youtube_id": null
+    },
+    {
+      "chapter": 2,
+      "part": 1,
+      "title": "Sammy the Squirrel's Magical Acorn",
+      "status": "pending",
+      "youtube_id": null
+    },
+    {
+      "chapter": 2,
+      "part": 2,
+      "title": "Bella Bunny Brushes Her Long Ears",
+      "status": "pending",
+      "youtube_id": null
+    },
+    {
+      "chapter": 3,
+      "part": 1,
+      "title": "Oliver Owl's Bedtime Routine",
+      "status": "pending",
+      "youtube_id": null
+    },
+    {
+      "chapter": 3,
+      "part": 2,
+      "title": "The Cloud Kingdom's Rainbow Bridge",
+      "status": "pending",
+      "youtube_id": null
+    },
+    {
+      "chapter": 4,
+      "part": 1,
+      "title": "Penny Penguin's Polite Please",
+      "status": "pending",
+      "youtube_id": null
+    },
+    {
+      "chapter": 4,
+      "part": 2,
+      "title": "The Whispering Woods of Wonder",
+      "status": "pending",
+      "youtube_id": null
+    },
+    {
+      "chapter": 5,
+      "part": 1,
+      "title": "Dino's Delicious Veggie Crunch",
+      "status": "pending",
+      "youtube_id": null
+    },
+    {
+      "chapter": 5,
+      "part": 2,
+      "title": "The Starry Sky Sleepytime Lullaby",
+      "status": "pending",
+      "youtube_id": null
+    }
+  ]
+}
