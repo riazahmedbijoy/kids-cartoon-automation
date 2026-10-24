@@ -30,14 +30,12 @@ def get_cartoon_image(prompt):
     print(f"🎨 Generating Cover Image for: '{prompt}'...")
     try:
         encoded_prompt = urllib.parse.quote(prompt)
-        # Added a random seed to bypass cache/limit issues
         url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1920&nologo=true&seed={int(time.time())}"
         response = requests.get(url, timeout=60)
         response.raise_for_status()
         return Image.open(BytesIO(response.content)).convert("RGBA")
     except Exception as e:
         print(f"❌ Error generating image: {e}. Using gradient background.")
-        # Fallback background
         img = Image.new('RGBA', (1080, 1920), color=(20, 30, 50))
         return img
 
@@ -45,9 +43,8 @@ def text_to_speech_edge(text, output_path):
     """Uses Microsoft Edge's realistic neural voices."""
     print(f"🎤 Converting script to speech using Edge TTS...")
     async def _generate():
-        # 'en-US-AnaNeural' is a cute child voice. You can also use 'en-US-AriaNeural'
         voice = "en-US-AnaNeural" 
-        rate = "-10%" # Slightly slower for storytelling
+        rate = "-10%"
         communicate = edge_tts.Communicate(text, voice, rate=rate)
         await communicate.save(str(output_path))
         
@@ -106,9 +103,8 @@ def create_video(image_path, audio_path, output_path):
     audio_clip = AudioFileClip(str(audio_path))
     duration = audio_clip.duration
     
-    # Create a slowly zooming clip of the cover image
-    clip = ImageClip(image_path).set_duration(duration)
-    # Slow zoom-in effect
+    # FIX: Converting image_path to string so MoviePy can read it
+    clip = ImageClip(str(image_path)).set_duration(duration)
     clip = clip.resize(lambda t: 1 + 0.10 * (t / duration))
     clip = clip.set_audio(audio_clip)
     
