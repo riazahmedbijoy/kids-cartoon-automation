@@ -41,65 +41,54 @@ def update_content_plan(plan):
     with open(CONTENT_PLAN_FILE, 'w') as f:
         json.dump(plan, f, indent=2)
 
-def produce_short_video(lesson):
-    print(f"\n▶️ Starting production for Kids Short: '{lesson['title']}'")
+def produce_video(lesson):
+    print(f"\n▶️ Starting production for Kids Video: '{lesson['title']}'")
     unique_id = f"{datetime.datetime.now().strftime('%Y%m%d')}_{lesson['chapter']}"
     
-    # 1. Generate Story and Image Prompt
+    # 1. Generate Long Story with 6 Scenes
     lesson_content = generate_lesson_content(lesson['title'])
     story_text = lesson_content['story_text']
-    image_prompt = lesson_content['image_prompt']
-    hashtags = lesson_content.get("hashtags", "#KidsStories #Cartoon #Shorts")
+    scenes = lesson_content['scenes']
+    hashtags = lesson_content.get("hashtags", "#KidsStories #Cartoon")
     
-    print(f"📖 Story: {story_text}")
-    
-    # 2. Generate Audio
+    # 2. Generate Audio for the whole story
     audio_mp3_path = OUTPUT_DIR / f"audio_{unique_id}.mp3"
     audio_path = text_to_speech(story_text, audio_mp3_path)
     
-    # 3. Generate Cartoon Image
+    # 3. Generate Images for each scene
     slide_dir = OUTPUT_DIR / f"slides_{unique_id}"
-    slide_content = {
-        "title": lesson['title'],
-        "content": story_text,
-        "image_prompt": image_prompt
-    }
-    slide_path = generate_visuals(
-        output_dir=slide_dir,
-        video_type='short',
-        slide_content=slide_content,
-        slide_number=1,
-        total_slides=1
-    )
+    slide_paths = []
+    for i, scene in enumerate(scenes):
+        path = generate_visuals(
+            output_dir=slide_dir,
+            video_type='video',
+            scene_text=scene['text'],
+            image_prompt=scene['image_prompt'],
+            slide_number=i+1
+        )
+        slide_paths.append(path)
     
-    # 4. Create Video
-    video_path = OUTPUT_DIR / f"short_{unique_id}.mp4"
-    create_video([slide_path], [audio_path], video_path, 'short')
+    # 4. Create Animated Video (Pulse & Zoom Effect)
+    video_path = OUTPUT_DIR / f"video_{unique_id}.mp4"
+    create_video(slide_paths, audio_path, video_path)
     
-    # 5. Create Thumbnail
-    thumb_path = generate_visuals(
-        output_dir=OUTPUT_DIR,
-        video_type='short',
-        thumbnail_title=lesson['title']
-    )
-    
-    # 6. Upload to YouTube
-    print("\n📤 Uploading Short to YouTube...")
-    short_desc = f"{story_text}\n\n{hashtags}"
-    short_title = f"{lesson['title']} #Shorts"
+    # 5. Upload to YouTube
+    print("\n📤 Uploading Video to YouTube...")
+    video_desc = f"{story_text}\n\n{hashtags}"
+    video_title = f"{lesson['title']}" 
     
     video_id = upload_to_youtube(
         video_path,
-        short_title,
-        short_desc,
-        "Kids, Cartoon, Shorts, Stories, Animation",
-        thumb_path
+        video_title,
+        video_desc,
+        "Kids, Cartoon, Stories, Animation",
+        slide_paths[0] 
     )
     
     return video_id
 
 def main():
-    print("🚀 Starting Kids Cartoon Shorts Generator")
+    print("🚀 Starting Kids Cartoon Video Generator")
     OUTPUT_DIR.mkdir(exist_ok=True)
     
     try:
@@ -117,7 +106,7 @@ def main():
         failed = []
         for lesson_index, lesson in pending[:LESSONS_PER_RUN]:
             try:
-                video_id = produce_short_video(lesson)
+                video_id = produce_video(lesson)
                 if video_id:
                     for original_lesson in plan['lessons']:
                         if original_lesson['title'].strip().lower() == lesson['title'].strip().lower():
